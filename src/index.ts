@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import {login,authenticate,approvedUsers,listManagedAccounts,changePassword,resetPasswordByAdmin,verifyPassword} from './services/auth.service.js';
@@ -13,7 +14,22 @@ import {createReportWorkbook} from './services/report-export.service.js';
 if(!process.env.MONGO_URI){console.error('\n[CONFIG ERROR] MONGO_URI is missing. Copy server/.env.example to server/.env, then enter your MongoDB Atlas URI. See server/START-HERE.md.\n');process.exit(1);}
 if(DEMO_MODE){console.error('\n[CONFIG ERROR] DEMO_MODE must be false for MongoDB-backed evaluations. Update server/.env.\n');process.exit(1);}
 if((process.env.SESSION_SECRET||'').length<32){console.error('\n[CONFIG ERROR] SESSION_SECRET must contain at least 32 random characters. Generate one with: node -e \"console.log(require(\'node:crypto\').randomBytes(48).toString(\'hex\'))\"\n');process.exit(1);}
-const app=express();app.disable('x-powered-by');app.use(helmet({contentSecurityPolicy:false}));app.use(express.json({limit:'32kb'}));
+const app=express();
+app.disable('x-powered-by');
+
+// Frontend is hosted separately at https://lmsev.bhccs.in.
+// Set FRONTEND_ORIGIN in the Hostinger backend environment settings.
+const frontendOrigin = (process.env.FRONTEND_ORIGIN || 'https://lmsev.bhccs.in').replace(/\/$/, '');
+app.use(cors({
+  origin: frontendOrigin,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 204,
+}));
+
+app.use(helmet({contentSecurityPolicy:false}));
+app.use(express.json({limit:'32kb'}));
 app.use('/api',rateLimit({windowMs:60000,limit:120,standardHeaders:'draft-7',legacyHeaders:false}));
 app.get('/api/auth/users',(_req,res)=>res.json({evaluators:approvedUsers('evaluator'),admins:approvedUsers('admin')}));
 app.post('/api/auth/login',async(req,res,next)=>{try{const username=String(req.body?.staffId||req.body?.username||'').trim();const password=String(req.body?.password||'');const session=await login(username,password);if(!session)return res.status(401).json({error:'Invalid approved account or password. Ask the LMS administrators to check account setup.'});res.set('Cache-Control','no-store');res.json(session);}catch(e){next(e);}});
