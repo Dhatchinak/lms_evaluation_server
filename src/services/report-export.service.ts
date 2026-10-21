@@ -18,7 +18,7 @@ function top(sh,heading,detail,last){
  sh.getCell('A2').font={name:'Aptos',size:12,color:{argb:C.blue}};sh.getRow(2).height=28;
 }
 export async function createReportWorkbook(report,records,role='Evaluator',directory=null){
- const wb=new ExcelJS.Workbook();wb.creator='Faculty Studio';wb.title='Submitted Theory Course Evaluation Report';
+ const wb=new ExcelJS.Workbook();wb.creator='BHC LMS Evaluation';wb.title='Submitted Theory Course Evaluation Report';
  const date=new Date().toLocaleDateString('en-IN');
  const evaluator=role==='Evaluator'?report.evaluatorName||'Signed-in evaluator':'All evaluators';
  const details=`${role} · ${report.department} · ${evaluator} · ${date} · THEORY PAPERS ONLY`;
@@ -34,7 +34,7 @@ export async function createReportWorkbook(report,records,role='Evaluator',direc
  sh.views=[{state:'frozen',ySplit:6}];sh.autoFilter={from:'A6',to:'H6'};
  sh.headerFooter.oddFooter='Bishop Heber College (Autonomous) · Page &P of &N';
  const courses=wb.addWorksheet('Theory Course Details');
- courses.columns=[{header:'Evaluator',key:'evaluator',width:25},{header:'Faculty name',key:'staff',width:31},{header:'Staff ID',key:'staffId',width:22},{header:'Department',key:'dept',width:29},{header:'Paper code',key:'code',width:17},{header:'Course title',key:'title',width:50},{header:'Program',key:'program',width:19},{header:'Year',key:'year',width:9},{header:'Section',key:'section',width:13},{header:'LMS code',key:'lms',width:20},{header:'Marks / 100',key:'marks',width:18},{header:'Staff average',key:'average',width:19},{header:'Submitted at',key:'at',width:22}];
+ courses.columns=[{header:'Evaluator',key:'evaluator',width:25},{header:'Faculty name',key:'staff',width:31},{header:'Staff ID',key:'staffId',width:22},{header:'Department',key:'dept',width:29},{header:'Paper code',key:'code',width:17},{header:'Course title',key:'title',width:50},{header:'Program',key:'program',width:19},{header:'Year',key:'year',width:9},{header:'Section',key:'section',width:13},{header:'LMS Course ID (optional)',key:'lms',width:20},{header:'Marks / 100',key:'marks',width:18},{header:'Staff average',key:'average',width:19},{header:'Submitted at',key:'at',width:22}];
  styleRow(courses.getRow(1),true);
  for(const r of report.rows){for(const c of r.courses){let line=courses.addRow({evaluator:r.evaluatorName,staff:r.staffName,staffId:r.staffId,dept:c.department_name,code:c.paper_code,title:c.paper_title,program:c.program_id,year:c.year,section:c.section_name,lms:c.lmsCode,marks:c.total,average:r.average,at:c.updatedAt});styleRow(line);line.getCell('K').numFmt='0.00';line.getCell('L').numFmt='0.00';}}
  courses.views=[{state:'frozen',ySplit:1,xSplit:3}];courses.autoFilter={from:'A1',to:'M1'};
@@ -46,7 +46,7 @@ export async function createReportWorkbook(report,records,role='Evaluator',direc
    {header:'Faculty ID',key:'staffId',width:22},{header:'Faculty name',key:'staffName',width:29},
    {header:'Department',key:'dept',width:27},{header:'Paper code',key:'paperCode',width:19},
    {header:'Theory course',key:'paperTitle',width:44},{header:'Class / section',key:'section',width:24},
-   {header:'LMS code',key:'lmsCode',width:18},
+   {header:'LMS Course ID (optional)',key:'lmsCode',width:18},
    ...CRITERIA.map(c=>({header:`${c.level} ${c.title} / ${c.max}`,key:c.key,width:24})),
    {header:'Course total / 100',key:'total',width:21},
    {header:'Faculty submitted avg',key:'average',width:24},
@@ -67,7 +67,7 @@ export async function createReportWorkbook(report,records,role='Evaluator',direc
  // but only theory papers, and respecting the current department/evaluator/search filters.
  if(role==='Administrator'){
   const audit=wb.addWorksheet('All Evaluator Records');
-  audit.columns=[{header:'Evaluator',key:'evaluator',width:28},{header:'Staff name',key:'staff',width:32},{header:'Staff ID',key:'staffId',width:22},{header:'Department',key:'dept',width:28},{header:'Paper code',key:'code',width:18},{header:'Course',key:'title',width:46},{header:'LMS code',key:'lms',width:19},{header:'Status',key:'status',width:16},{header:'Marks / 100',key:'total',width:20},{header:'Updated',key:'updated',width:26},...CRITERIA.map(c=>({header:`${c.level} ${c.short} / ${c.max}`,key:c.key,width:20}))];
+  audit.columns=[{header:'Evaluator',key:'evaluator',width:28},{header:'Staff name',key:'staff',width:32},{header:'Staff ID',key:'staffId',width:22},{header:'Department',key:'dept',width:28},{header:'Paper code',key:'code',width:18},{header:'Course',key:'title',width:46},{header:'LMS Course ID (optional)',key:'lms',width:19},{header:'Status',key:'status',width:16},{header:'Marks / 100',key:'total',width:20},{header:'Updated',key:'updated',width:26},...CRITERIA.map(c=>({header:`${c.level} ${c.short} / ${c.max}`,key:c.key,width:20}))];
   styleRow(audit.getRow(1),true);
   const permitted=new Set((directory?.staff||[]).flatMap(s=>s.courses.map(c=>`${s.staffId}|${c.courseKey}`)));
   const search=String(report.search||'').toLowerCase();

@@ -8,7 +8,7 @@ export function parseEvaluation(input: Partial<Evaluation>,faculty: Faculty): Ev
   const course=faculty.courses.find(c=>c.courseKey===input.courseKey);
   if(!course)throw bad('Selected course is not assigned to this faculty member.');
   const lmsCode=String(input.lmsCode??'').trim();
-  if(lmsCode.length>64||/[\r\n<>]/.test(lmsCode))throw bad('LMS code must be at most 64 characters, on one line.');
+  if(lmsCode.length>64||/[\r\n<>]/.test(lmsCode))throw bad('LMS course ID must be at most 64 characters, on one line.');
   const marks=blankMarks();
   for(const c of CRITERIA){
     const v=input.marks?.[c.key];if(v===null||v===undefined)continue;
@@ -17,7 +17,7 @@ export function parseEvaluation(input: Partial<Evaluation>,faculty: Faculty): Ev
   }
   const stats=summarize(marks);
   const status: EvaluationStatus=input.status==='submitted'?'submitted':'draft';
-  if(status==='submitted'&&(!stats.complete||!lmsCode))throw bad('Enter the LMS code and all 14 marks before submitting.');
+  if(status==='submitted'&&!stats.complete)throw bad('Enter all 14 marks before submitting.');
   const evaluatorName=String(input.evaluatorName??'').trim();
   if(!evaluatorName||evaluatorName.length>80||/[<>\r\n]/.test(evaluatorName))throw bad('Enter a valid evaluator name.');
   return {staffId:faculty.staffId,staffName:faculty.name,department:course.department_name,designation:'',courseKey:course.courseKey,paperCode:course.paper_code,paperTitle:course.paper_title,paperType:course.paper_type,programId:course.program_id,year:course.year,sectionName:course.section_name,lmsCode,marks,total:stats.total,maxTotal:100,percentage:stats.percentage,status,evaluatorName,evaluatorId:input.evaluatorId,evaluatorDepartment:input.evaluatorDepartment,rubricVersion:RUBRIC_VERSION};

@@ -23,7 +23,7 @@ export function validateScore(e: Evaluation) {
   }
   const sum = summarize(marks);
   if (Math.abs(sum.total - e.total) > 1e-8) throw bad('Marks total mismatch.');
-  if (e.status === 'submitted' && (!sum.complete || !e.lmsCode.trim())) throw bad('Submit requires LMS code and all 14 marks.');
+  if (e.status === 'submitted' && !sum.complete) throw bad('Submit requires all 14 marks.');
   return sum;
 }
 

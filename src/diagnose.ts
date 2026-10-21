@@ -3,7 +3,7 @@ import {existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 const problems:string[]=[];
 const envFile=resolve(process.cwd(),'.env');
-console.log('Faculty Studio backend configuration check');
+console.log('BHC LMS Evaluation backend configuration check');
 console.log('Current folder:',process.cwd());
 console.log('server/.env present:',existsSync(envFile)?'YES':'NO');
 if(!existsSync(envFile))problems.push('Copy .env.example to .env in the server folder.');
