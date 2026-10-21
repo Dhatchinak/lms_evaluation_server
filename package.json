@@ -1,0 +1,37 @@
+{
+  "name": "faculty-studio-server",
+  "version": "5.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "test": "tsx --test tests/*.test.ts",
+    "audit:db": "tsx src/check-integrity.ts",
+    "verify:schemas": "tsx src/verify-schemas.ts",
+    "account:create": "tsx src/create-account.ts",
+    "doctor": "tsx src/diagnose.ts",
+    "test:compiled": "tsc -p tsconfig.tests.json && node --test dist-test/tests/*.test.js",
+    "db:cleanup": "tsx src/cleanup-legacy.ts",
+    "accounts:seed": "tsx src/seed-accounts.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "mongodb": "^6.15.0",
+    "mongoose": "^8.9.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "tsx": "^4.20.6",
+    "@types/node": "^22.15.0",
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17"
+  }
+}

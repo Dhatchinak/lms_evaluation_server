@@ -1,0 +1,45 @@
+{
+  "staff_id": "BHC-STE-00390",
+  "name": "Eliahim Jeevaraj P.S.",
+  "salute": "Dr.",
+  "department_name": "COMPUTER SCIENCE",
+  "designation": "Assistant Professor",
+  "class_attend": [
+    {
+      "paper_code": "P25CS307",
+      "paper_title": "Digital Image Processing",
+      "paper_type": "Core VII",
+      "program_id": "PG-MSC-CS",
+      "year": "2",
+      "section_name": "A",
+      "department_name": "COMPUTER SCIENCE"
+    },
+    {
+      "paper_code": "P25CS3P5",
+      "paper_title": "Digital Image Processing Lab",
+      "paper_type": "Core Prac. V",
+      "program_id": "PG-MSC-CS",
+      "year": "2",
+      "section_name": "A",
+      "department_name": "COMPUTER SCIENCE"
+    },
+    {
+      "paper_code": "U24CS5P6",
+      "paper_title": "Enterprise Infrastructure and Cloud Technologies Lab",
+      "paper_type": "Core",
+      "program_id": "UG-BSC-CS",
+      "year": "3",
+      "section_name": "Aided",
+      "department_name": "COMPUTER SCIENCE"
+    },
+    {
+      "paper_code": "U24CS506",
+      "paper_title": "Enterprise Infrastructure and Cloud Technologies",
+      "paper_type": "Core VI",
+      "program_id": "UG-BSC-CS",
+      "year": "3",
+      "section_name": "Aided",
+      "department_name": "COMPUTER SCIENCE"
+    }
+  ]
+}
