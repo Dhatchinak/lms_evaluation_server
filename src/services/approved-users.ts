@@ -180,5 +180,11 @@ export const APPROVED_ADMINS = [
     "displayName": "Dr. P. S. Eliahim Jeevaraj",
     "department": "Computer Science",
     "role": "admin"
+  },
+  {
+    "username": "ADMIN-VIOLET",
+    "displayName": "Dr. V. Violet Dhayabaran",
+    "department": "",
+    "role": "admin"
   }
 ] as const;
