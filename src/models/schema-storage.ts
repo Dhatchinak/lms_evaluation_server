@@ -40,6 +40,7 @@ const toPublic = (doc: any): Evaluation => ({
   evaluatorName: doc.evaluator?.evaluatorName,
   evaluatorId: doc.evaluatorId,
   lmsCode: doc.lmsCode,
+  remarks: doc.remarks || '',
   marks: Object.fromEntries(CRITERIA.map(c => [c.key, doc.scoring?.marks?.[c.key] ?? null])),
   total: doc.scoring?.total,
   status: doc.status,
@@ -66,7 +67,7 @@ export async function listAllRecords(): Promise<Evaluation[]> {
 }
 
 const snapshot = (record: Evaluation) => ({
-  lmsCode: record.lmsCode, marks: { ...record.marks }, total: record.total,
+  lmsCode: record.lmsCode, remarks: record.remarks || '', marks: { ...record.marks }, total: record.total,
   status: record.status, rubricVersion: record.rubricVersion,
 });
 
@@ -90,7 +91,7 @@ export async function saveEvaluation(record: Evaluation): Promise<Evaluation> {
     course: { courseKey: record.courseKey, paperCode: record.paperCode, paperTitle: record.paperTitle,
       paperType: String(record.paperType || ''), programId: record.programId, year: String(record.year),
       section: record.sectionName, department: record.department, isTheory: true },
-    lmsCode: record.lmsCode, status: record.status,
+    lmsCode: record.lmsCode, remarks: record.remarks || '', status: record.status,
     scoring: { rubricVersion: RUBRIC_VERSION, marks: { ...record.marks }, total: score.total, maximum: 100, complete: score.complete },
     source: 'ERP departments API', sourceVerifiedAt: now,
   };
@@ -108,7 +109,7 @@ export async function saveEvaluation(record: Evaluation): Promise<Evaluation> {
     }
     if (existing?.status === 'submitted' && record.status === 'draft') throw Object.assign(new Error('Submitted marks cannot become a draft.'), { status: 409 });
     const previous = toPublic(existing);
-    if (previous.lmsCode === record.lmsCode && previous.status === record.status &&
+    if (previous.lmsCode === record.lmsCode && (previous.remarks || '') === (record.remarks || '') && previous.status === record.status &&
         JSON.stringify(previous.marks) === JSON.stringify(record.marks)) return previous;
     const revision = Number(existing?.revision || 1);
     const priorHistory = Array.isArray(existing?.history) ? existing.history.length : 0;

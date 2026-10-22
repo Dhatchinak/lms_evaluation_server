@@ -9,6 +9,9 @@ export function parseEvaluation(input: Partial<Evaluation>,faculty: Faculty): Ev
   if(!course)throw bad('Selected course is not assigned to this faculty member.');
   const lmsCode=String(input.lmsCode??'').trim();
   if(lmsCode.length>64||/[\r\n<>]/.test(lmsCode))throw bad('LMS course ID must be at most 64 characters, on one line.');
+  if(typeof input.remarks !== 'undefined' && typeof input.remarks !== 'string')throw bad('Remarks must be text.');
+  const remarks=String(input.remarks??'').trim();
+  if(remarks.length>1000)throw bad('Remarks must be 1000 characters or fewer.');
   const marks=blankMarks();
   for(const c of CRITERIA){
     const v=input.marks?.[c.key];if(v===null||v===undefined)continue;
@@ -20,5 +23,5 @@ export function parseEvaluation(input: Partial<Evaluation>,faculty: Faculty): Ev
   if(status==='submitted'&&!stats.complete)throw bad('Enter all 14 marks before submitting.');
   const evaluatorName=String(input.evaluatorName??'').trim();
   if(!evaluatorName||evaluatorName.length>80||/[<>\r\n]/.test(evaluatorName))throw bad('Enter a valid evaluator name.');
-  return {staffId:faculty.staffId,staffName:faculty.name,department:course.department_name,designation:'',courseKey:course.courseKey,paperCode:course.paper_code,paperTitle:course.paper_title,paperType:course.paper_type,programId:course.program_id,year:course.year,sectionName:course.section_name,lmsCode,marks,total:stats.total,maxTotal:100,percentage:stats.percentage,status,evaluatorName,evaluatorId:input.evaluatorId,evaluatorDepartment:input.evaluatorDepartment,rubricVersion:RUBRIC_VERSION};
+  return {staffId:faculty.staffId,staffName:faculty.name,department:course.department_name,designation:'',courseKey:course.courseKey,paperCode:course.paper_code,paperTitle:course.paper_title,paperType:course.paper_type,programId:course.program_id,year:course.year,sectionName:course.section_name,lmsCode,remarks,marks,total:stats.total,maxTotal:100,percentage:stats.percentage,status,evaluatorName,evaluatorId:input.evaluatorId,evaluatorDepartment:input.evaluatorDepartment,rubricVersion:RUBRIC_VERSION};
 }

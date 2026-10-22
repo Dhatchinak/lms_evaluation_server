@@ -75,6 +75,7 @@ export const EvaluationSchema = new Schema({
   staff: { type: staffSchema, required: true },
   course: { type: courseSchema, required: true },
   lmsCode: { type: String, default: '', maxlength: 64 },
+  remarks: { type: String, default: '', maxlength: 1000 },
   scoring: { type: scoringSchema, required: true },
   status: { type: String, enum: ['draft', 'submitted'], required: true },
   submittedAt: { type: Date, default: null },
