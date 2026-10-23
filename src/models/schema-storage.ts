@@ -9,6 +9,20 @@ const bad = (message: string) => Object.assign(new Error(message), { status: 400
 const academicYear = () => process.env.ACADEMIC_YEAR || '2026-2027';
 const semester = () => process.env.ACADEMIC_SEMESTER === 'EVEN' ? 'EVEN' : 'ODD';
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
+
+// Report pages only need the current scoring snapshot, never its revision history.
+// Reuse one bounded read across concurrent report/overview/progress requests.
+const REPORT_PROJECTION = '-history -source -sourceVerifiedAt';
+const REPORT_CACHE_MS = 10_000;
+let reportCache: {rows: Evaluation[]; expiresAt: number} | null = null;
+let reportInFlight: Promise<Evaluation[]> | null = null;
+let reportCacheGeneration = 0;
+function invalidateReportCache() {
+  reportCacheGeneration++;
+  reportCache = null;
+  reportInFlight = null;
+}
+
 export function validateScore(e: Evaluation) {
   if (e.rubricVersion !== RUBRIC_VERSION) throw bad('Rubric version mismatch.');
   const marks = e.marks ?? {};
@@ -57,13 +71,28 @@ function isVerifiedEvaluation(d: any): boolean {
 }
 export async function listEvaluations(staffId: string): Promise<Evaluation[]> {
   await connectModels();
-  const records = await EvaluationModel.find({ staffId, recordType: 'course_evaluation', academicYear: academicYear(), semester: semester() }).lean();
+  const records = await EvaluationModel.find({ staffId, recordType: 'course_evaluation', academicYear: academicYear(), semester: semester() }).select(REPORT_PROJECTION).lean();
   return records.filter(isVerifiedEvaluation).map(toPublic);
 }
 export async function listAllRecords(): Promise<Evaluation[]> {
-  await connectModels();
-  const records = await EvaluationModel.find({ recordType: 'course_evaluation', academicYear: academicYear(), semester: semester() }).lean();
-  return records.filter(isVerifiedEvaluation).map(toPublic);
+  if (reportCache && Date.now() < reportCache.expiresAt) return reportCache.rows;
+  if (reportInFlight) return reportInFlight;
+  const generation = reportCacheGeneration;
+  const operation = (async () => {
+    await connectModels();
+    const documents = await EvaluationModel.find({
+      recordType: 'course_evaluation', academicYear: academicYear(), semester: semester(),
+    }).select(REPORT_PROJECTION).lean();
+    const rows = documents.filter(isVerifiedEvaluation).map(toPublic);
+    // Never repopulate an outdated cache after marks were saved meanwhile.
+    if (generation === reportCacheGeneration) {
+      reportCache = {rows, expiresAt: Date.now() + REPORT_CACHE_MS};
+    }
+    return rows;
+  })();
+  reportInFlight = operation;
+  try { return await operation; }
+  finally { if (reportInFlight === operation) reportInFlight = null; }
 }
 
 const snapshot = (record: Evaluation) => ({
@@ -101,6 +130,7 @@ export async function saveEvaluation(record: Evaluation): Promise<Evaluation> {
       try {
         const saved = await EvaluationModel.create({ ...base, submittedAt: record.status === 'submitted' ? now : null,
           revision: 1, history: [{ revision: 1, action: 'created', performedBy: evaluatorId, recordedAt: now, before: null, after: snapshot(record) }] });
+        invalidateReportCache();
         return toPublic(saved.toObject());
       } catch (error: unknown) {
         if ((error as { code?: number }).code === 11000) continue;
@@ -120,7 +150,7 @@ export async function saveEvaluation(record: Evaluation): Promise<Evaluation> {
       $push: { history: { revision: revision + 1, action: 'updated', performedBy: evaluatorId, recordedAt: now,
         before: snapshot(previous), after: snapshot(record) } },
     }, { new: true, runValidators: true });
-    if (changed) return toPublic(changed.toObject());
+    if (changed) { invalidateReportCache(); return toPublic(changed.toObject()); }
   }
   throw Object.assign(new Error('Evaluation changed concurrently. Refresh and retry.'), { status: 409 });
 }

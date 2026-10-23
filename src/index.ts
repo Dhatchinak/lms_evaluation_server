@@ -7,6 +7,7 @@ import {login,authenticate,approvedUsers,listManagedAccounts,changePassword,rese
 import {DEMO_MODE} from './services/staff.service.js';
 import {loadDirectory,directoryStatus} from './services/directory.service.js';
 import {listEvaluations,saveEvaluation,listAllRecords,databaseHealth,evaluationHistory} from './models/schema-storage.js';
+import {connectModels,EvaluationModel} from './models/schemas/index.js';
 import {parseEvaluation,validStaffId} from './utils/validation.js';
 import {buildReport,buildCompletedReport} from './services/report.service.js';
 import {createReportWorkbook} from './services/report-export.service.js';
@@ -69,12 +70,21 @@ app.get('/api/health',async (_q,r)=>{try{await databaseHealth();r.json({ok:true,
 app.get('/api/directory',viewer,async(req,res,next)=>{try{res.set('Cache-Control','no-store');const data=await Promise.race([loadDirectory(req.query.refresh==='true'),new Promise<never>((_,reject)=>setTimeout(()=>reject(Object.assign(new Error('The ERP directory is still synchronizing. Please retry in a few moments.'),{status:503})),25000))]);res.json(data);}catch(e){next(e);}});
 // Institution-wide progress is intentionally separate from evaluator-owned reports.
 // A staff member's submitted courses remain completed when a different evaluator logs in.
-app.get('/api/faculty-progress',viewer,async(_req,res,next)=>{try{
- const [directory,records]=await Promise.all([loadDirectory(),listAllRecords()]);
- const progress=buildReport(directory,records);
- res.set('Cache-Control','no-store');
- res.json({rows:progress.rows.map(row=>({staffId:row.staffId,courseCount:row.courseCount,completedCourses:row.completedCourses,average:row.average,status:row.status}))});
-}catch(e){next(e);}});
+app.get('/api/faculty-progress',viewer,async(_req,res,next)=>{
+ const started=Date.now();
+ try{
+  const [directory,records]=await Promise.all([
+   (async()=>{const t=Date.now();try{return await loadDirectory();}finally{console.info(`[PERF] faculty-progress directory: ${Date.now()-t}ms`);}})(),
+   (async()=>{const t=Date.now();try{const result=await listAllRecords();console.info(`[PERF] faculty-progress MongoDB record read: ${Date.now()-t}ms (${result.length} records)`);return result;}catch(error){console.info(`[PERF] faculty-progress MongoDB record read failed after ${Date.now()-t}ms`);throw error;}})()
+  ]);
+  const calculationStarted=Date.now();
+  const progress=buildReport(directory,records);
+  console.info(`[PERF] faculty-progress calculation: ${Date.now()-calculationStarted}ms`);
+  res.set('Cache-Control','no-store');
+  res.json({rows:progress.rows.map(row=>({staffId:row.staffId,courseCount:row.courseCount,completedCourses:row.completedCourses,average:row.average,status:row.status}))});
+ }catch(e){next(e);}
+ finally{console.info(`[PERF] faculty-progress total: ${Date.now()-started}ms`);}
+});
 app.get('/api/staff/:staffId/assigned-classes',async(req,res,next)=>{try{
  const id=String(req.params.staffId).toUpperCase();
  if(!validStaffId(id))return res.status(400).json({error:'Invalid staff ID.'});
@@ -97,20 +107,65 @@ async function loadReport(req){
 }
 app.get('/api/report',viewer,async(req,res,next)=>{try{const {report}=await loadReport(req);res.set('Cache-Control','no-store');res.json(report);}catch(e){next(e);}});
 app.get('/api/report/export',viewer,async(req,res,next)=>{try{const {report,records,directory}=await loadReport(req);const exportReport={...report,search:String(req.query.search||'')};const wb=await createReportWorkbook(exportReport,records,isAdmin(req)?'Administrator':'Evaluator',directory);res.set({'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':'attachment; filename="BHC-LMS-Evaluation-Report.xlsx"','Cache-Control':'no-store'});await wb.xlsx.write(res);res.end();}catch(e){next(e);}});
-app.get('/api/admin/overview',administrator,async(req,res,next)=>{try{const {directory,records}=await loadReport(req);// An administrator cannot combine two different evaluators' partially submitted
- // courses and falsely mark a faculty member complete. Keep evaluator-specific
- // submissions separate when calculating institution and department summaries.
- const accurateStats=(department?:string)=>{
-   const dirStats=buildReport(directory,[],{department}).stats;
-   const scoped=buildCompletedReport(directory,records,{department});
-   const fullyEvaluatedStaff=new Set(scoped.rows.filter(r=>r.averageIsFinal).map(r=>r.staffId)).size;
-   const savedCourseEvaluations=scoped.rows.reduce((total,r)=>total+r.courses.length,0);
-   return {...dirStats,completedStaff:fullyEvaluatedStaff,submittedCourses:savedCourseEvaluations,
-    completionRate:dirStats.staff?Math.round(fullyEvaluatedStaff/dirStats.staff*100):0};
- };
- const report={stats:accurateStats()};
- const departments=directory.departments.map(department=>({department,...accurateStats(department)}));
- res.set('Cache-Control','no-store');res.json({report,departments,savedRecords:records.length,legacyRecords:records.filter(x=>x.rubricVersion!==2).length});}catch(e){next(e);}});
+app.get('/api/admin/overview',administrator,async(_req,res,next)=>{try{
+ // One MongoDB read and one submitted-course aggregation, rather than
+ // rebuilding a full report for every department and each concurrent request.
+ const [directory,records] = await Promise.all([loadDirectory(),listAllRecords()]);
+ const completedReport = buildCompletedReport(directory,records);
+ const baseStats = buildReport(directory,[]).stats;
+ const completedGlobal = new Set<string>();
+ const submittedByDepartment = new Map<string,number>();
+ const completedByDepartment = new Map<string,Set<string>>();
+ for (const row of completedReport.rows) {
+   if (row.averageIsFinal) completedGlobal.add(row.staffId);
+   for (const course of row.courses) {
+     const department = String(course.department_name || '');
+     submittedByDepartment.set(department,(submittedByDepartment.get(department)||0)+1);
+     if (row.averageIsFinal) {
+       if (!completedByDepartment.has(department)) completedByDepartment.set(department,new Set());
+       completedByDepartment.get(department)!.add(row.staffId);
+     }
+   }
+ }
+ const makeStats=(staff:number,courses:number,completedStaff:number,submittedCourses:number)=>({
+   staff,courses,completedStaff,submittedCourses,
+   completionRate:staff?Math.round(completedStaff/staff*100):0,
+   courseRate:courses?Math.round(submittedCourses/courses*100):0,
+ });
+ const submittedCourses = completedReport.rows.reduce((sum,row)=>sum+row.courses.length,0);
+ const stats = {...baseStats,...makeStats(baseStats.staff,baseStats.courses,completedGlobal.size,submittedCourses)};
+ const departments=directory.departments.map(department=>{
+   const base=buildReport(directory,[],{department}).stats;
+   return {department,...base,...makeStats(base.staff,base.courses,
+     completedByDepartment.get(department)?.size||0,submittedByDepartment.get(department)||0)};
+ });
+ res.set('Cache-Control','no-store').json({report:{stats},departments,
+   savedRecords:records.length,legacyRecords:records.filter(x=>x.rubricVersion!==2).length});
+}catch(e){next(e);}});
+// Read-only diagnostics: proves whether zero totals are due to an empty DB,
+// a term mismatch, validation problems, or ERP course-key changes.
+app.get('/api/admin/report-diagnostics',administrator,async(_req,res,next)=>{try{
+ await connectModels();
+ const academicYear = process.env.ACADEMIC_YEAR || '2026-2027';
+ const semester = process.env.ACADEMIC_SEMESTER === 'EVEN' ? 'EVEN' : 'ODD';
+ const filter = {recordType:'course_evaluation',academicYear,semester};
+ const [allDocuments,currentTermDocuments,submittedTermDocuments,records,directory] = await Promise.all([
+   EvaluationModel.countDocuments({}), EvaluationModel.countDocuments(filter),
+   EvaluationModel.countDocuments({...filter,status:'submitted'}),
+   listAllRecords(),loadDirectory(),
+ ]);
+ const permitted = new Set(directory.staff.flatMap(staff=>staff.courses.map(course=>`${staff.staffId}|${course.courseKey}`)));
+ const validSubmitted = records.filter(record=>record.status==='submitted');
+ const matching = validSubmitted.filter(record=>permitted.has(`${record.staffId}|${record.courseKey}`));
+ res.set('Cache-Control','no-store').json({ok:true,
+   database:process.env.MONGO_DB_NAME || 'faculty_engagement',collection:'LMS evaluation',
+   academicYear,semester,allDocuments,currentTermDocuments,submittedTermDocuments,
+   validatedTermRecords:records.length,validSubmittedRecords:validSubmitted.length,
+   submittedMatchingCurrentERP:matching.length,
+   erpFacultyCount:directory.staff.length,
+   erpEligibleCourseCount:directory.staff.reduce((count,staff)=>count+staff.courses.length,0),
+ });
+}catch(e){next(e);}});
 app.get('/api/admin/evaluations',administrator,async(req,res,next)=>{try{const records=await listAllRecords();const directory=await loadDirectory();const permitted=new Set(directory.staff.flatMap(s=>s.courses.map(c=>`${s.staffId}|${c.courseKey}`)));const department=String(req.query.department||'');const name=String(req.query.evaluator||'').trim().toLocaleLowerCase();const filtered=records.filter(x=>permitted.has(`${x.staffId}|${x.courseKey}`)&&(!department||x.department===department)&&(!name||String(x.evaluatorName||'').trim().toLocaleLowerCase()===name));res.set('Cache-Control','no-store');res.json({records:filtered.sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')))});}catch(e){next(e);}});
 app.get('/api/admin/history/:staffId',administrator,async(req,res,next)=>{try{const id=String(req.params.staffId||'').toUpperCase();if(!validStaffId(id))return res.status(400).json({error:'Invalid staff ID.'});res.set('Cache-Control','no-store');res.json({records:await evaluationHistory(id)});}catch(e){next(e);}});
 app.get('/api/admin/export',administrator,async(req,res,next)=>{try{const {report,records,directory}=await loadReport(req);const exportReport={...report,search:String(req.query.search||'')};const wb=await createReportWorkbook(exportReport,records,'Administrator',directory);res.set({'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':'attachment; filename="Faculty-Studio-Admin-Report.xlsx"','Cache-Control':'no-store'});await wb.xlsx.write(res);res.end();}catch(e){next(e);}});
