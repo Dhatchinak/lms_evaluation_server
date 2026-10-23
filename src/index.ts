@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import {login,authenticate,approvedUsers,listManagedAccounts,changePassword,resetPasswordByAdmin,verifyPassword} from './services/auth.service.js';
+import {login,authenticate,approvedUsers,listManagedAccounts,changePassword,resetPasswordByAdmin,createAdministrator,verifyPassword} from './services/auth.service.js';
 import {DEMO_MODE} from './services/staff.service.js';
 import {loadDirectory,directoryStatus} from './services/directory.service.js';
 import {listEvaluations,saveEvaluation,listAllRecords,databaseHealth,evaluationHistory} from './models/schema-storage.js';
@@ -37,7 +37,7 @@ app.use(express.json({limit:'32kb'}));
 // Keep a broad safety limit for ordinary traffic and a tighter login-only limit.
 app.use('/api',rateLimit({windowMs:60000,limit:1200,standardHeaders:'draft-7',legacyHeaders:false}));
 const loginLimiter=rateLimit({windowMs:60000,limit:120,standardHeaders:'draft-7',legacyHeaders:false});
-app.get('/api/auth/users',(_req,res)=>res.json({evaluators:approvedUsers('evaluator'),admins:approvedUsers('admin')}));
+app.get('/api/auth/users',async(_req,res,next)=>{try{const admins=await approvedUsers('admin');res.set('Cache-Control','private, max-age=15');res.json({evaluators:await approvedUsers('evaluator'),admins});}catch(e){next(e);}});
 app.post('/api/auth/login',loginLimiter,async(req,res,next)=>{try{const username=String(req.body?.staffId||req.body?.username||'').trim();const password=String(req.body?.password||'');const session=await login(username,password);if(!session)return res.status(401).json({error:'Invalid approved account or password. Ask the LMS administrators to check account setup.'});if(session.role==='evaluator')await recordLoginPresence(session.staffId,session.token).catch(e=>console.warn('[PRESENCE] Login activity unavailable:',e instanceof Error?e.message:e));res.set('Cache-Control','no-store');res.json(session);}catch(e){next(e);}});
 app.use('/api',async(req,res,next)=>{try{if(req.path==='/health')return next();const token=(req.get('authorization')||'').replace(/^Bearer\s+/i,'');const user=await authenticate(token);if(!user)return res.status(401).json({error:'Sign in to continue or session expired.'});(req as any).identity=user;if(user.role==='evaluator'&&!req.path.startsWith('/activity/')){await recordAuthenticatedRequest(user.username,token,req.method,req.path).catch(e=>console.warn('[PRESENCE] Authenticated request activity unavailable:',e instanceof Error?e.message:e));}next();}catch(e){next(e);}});
 app.get('/api/auth/me',(req,res)=>{const user=(req as any).identity;res.set('Cache-Control','no-store');res.json({username:user.username,role:user.role,name:user.name,department:user.department});});
@@ -63,6 +63,10 @@ app.get('/api/admin/live-evaluators',administrator,async(_req,res,next)=>{try{
   res.set('Cache-Control','no-store').json(await liveEvaluatorSnapshot());
 }catch(e){next(e);}});
 
+app.post('/api/admin/accounts/create-admin',administrator,async(req,res,next)=>{try{
+ const user=await createAdministrator({displayName:String(req.body?.displayName||''),department:String(req.body?.department||''),password:String(req.body?.password||'')});
+ res.status(201).set('Cache-Control','no-store').json({user});
+}catch(e){next(e);}});
 app.get('/api/admin/accounts',administrator,async(_req,res,next)=>{try{res.json({users:await listManagedAccounts()});}catch(e){next(e)}});
 app.post('/api/admin/accounts/reset-password',administrator,async(req,res,next)=>{try{const id=String(req.body?.username||'').toUpperCase(),password=String(req.body?.password||'');if(password.length<8)return res.status(400).json({error:'Password must be at least 8 characters.'});const ok=await resetPasswordByAdmin(id,password);if(!ok)return res.status(404).json({error:'Evaluator account not found.'});res.json({ok:true});}catch(e){next(e)}});
 app.post('/api/auth/change-password',async(req,res,next)=>{try{const user=identity(req),oldPassword=String(req.body?.oldPassword||''),newPassword=String(req.body?.newPassword||'');const {AccountModel}=await import('./models/schemas/index.js');const acct=await AccountModel.findOne({username:user.username}).lean();if(!acct||!verifyPassword(oldPassword,acct.passwordSalt,acct.passwordHash))return res.status(403).json({error:'Current password is incorrect.'});await changePassword(user.username,newPassword);res.json({ok:true,signOut:true});}catch(e){next(e)}});

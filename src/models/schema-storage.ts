@@ -13,7 +13,7 @@ const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).dige
 // Report pages only need the current scoring snapshot, never its revision history.
 // Reuse one bounded read across concurrent report/overview/progress requests.
 const REPORT_PROJECTION = '-history -source -sourceVerifiedAt';
-const REPORT_CACHE_MS = 10_000;
+const REPORT_CACHE_MS = 90_000;
 let reportCache: {rows: Evaluation[]; expiresAt: number} | null = null;
 let reportInFlight: Promise<Evaluation[]> | null = null;
 let reportCacheGeneration = 0;

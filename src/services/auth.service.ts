@@ -2,8 +2,9 @@ import { randomBytes, scryptSync, timingSafeEqual, createHmac } from 'node:crypt
 import { AccountModel, connectModels } from '../models/schemas/index.js';
 import { APPROVED_EVALUATORS, APPROVED_ADMINS } from './approved-users.js';
 const secret = () => { const value = process.env.SESSION_SECRET || ''; if (value.length < 32) throw new Error('SESSION_SECRET must have 32+ characters'); return value; };
-export function hashPassword(password: string, salt = randomBytes(16).toString('hex')) {
-  if (password.length < 8) throw new Error('Password must contain at least 8 characters.');
+export function hashPassword(password: string, salt = randomBytes(16).toString('hex'), requireEightCharacters = true) {
+  if (!password) throw new Error('Password cannot be empty.');
+  if (requireEightCharacters && password.length < 8) throw new Error('Password must contain at least 8 characters.');
   return {salt, hash:scryptSync(password,salt,64).toString('hex')};
 }
 export function verifyPassword(password: string, salt: string, hash: string): boolean {
@@ -27,15 +28,37 @@ export async function authenticate(token:string) {
   return {username:account.username,role:account.role,name:account.displayName,department:account.department||''};
  }catch{return null;}
 }
-export function approvedUsers(role:'admin'|'evaluator') {
- return role==='admin'?APPROVED_ADMINS:APPROVED_EVALUATORS;
+export async function approvedUsers(role:'admin'|'evaluator') {
+ // Dynamic administrators live in MongoDB; evaluators remain the authorized college list.
+ if (role==='evaluator') return APPROVED_EVALUATORS;
+ await connectModels();
+ const rows = await AccountModel.find({role:'admin',active:true}).select('username displayName department role -_id').lean();
+ return rows.map(row=>({username:row.username,displayName:row.displayName,department:row.department||'',role:'admin' as const}));
+}
+export async function createAdministrator(input:{displayName:string;department?:string;password:string}) {
+ const name=input.displayName.trim().replace(/\s+/g,' ');
+ if (name.length<5||name.length>100) throw Object.assign(new Error('Enter the administrator’s full name (5–100 characters).'),{status:400});
+ if (!input.password) throw Object.assign(new Error('Enter an administrator password.'),{status:400});
+ await connectModels();
+ const existing=await AccountModel.findOne({role:'admin',displayName:new RegExp('^'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'$','i')}).lean();
+ if(existing) throw Object.assign(new Error('An administrator with this name already exists.'),{status:409});
+ const {salt,hash}=hashPassword(input.password, undefined, false);
+ for(let i=0;i<5;i++){
+  const id='ADMIN-'+randomBytes(4).toString('hex').toUpperCase();
+  try {
+   const created=await AccountModel.create({username:id,role:'admin',displayName:name,department:String(input.department||'').trim().slice(0,100),passwordSalt:salt,passwordHash:hash,active:true,passwordVersion:1,mustChangePassword:true});
+   return {username:created.username,displayName:created.displayName,department:created.department||'',role:'admin'};
+  }catch(e){if((e as {code?:number}).code!==11000)throw e;}
+ }
+ throw new Error('Unable to allocate a unique administrator ID.');
 }
 export async function login(username:string,password:string) {
  const id=username.trim().toUpperCase();
- if(![...APPROVED_EVALUATORS,...APPROVED_ADMINS].some(u=>u.username===id)||!password)return null;
+ if(!password)return null;
  await connectModels();
  const account=await AccountModel.findOne({username:id,active:true}).lean();
  if(!account||!verifyPassword(password,account.passwordSalt,account.passwordHash))return null;
+ if(account.role==='evaluator'&&!APPROVED_EVALUATORS.some(u=>u.username===id))return null;
  await AccountModel.updateOne({_id:account._id},{$set:{lastLoginAt:new Date()}});
  return {token:issueToken({username:id,role:account.role,displayName:account.displayName,department:account.department,passwordVersion:account.passwordVersion}),role:account.role,name:account.displayName,staffId:id,department:account.department,mustChangePassword:account.mustChangePassword};
 }
