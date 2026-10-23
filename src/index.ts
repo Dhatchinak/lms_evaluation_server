@@ -10,6 +10,7 @@ import {listEvaluations,saveEvaluation,listAllRecords,databaseHealth,evaluationH
 import {parseEvaluation,validStaffId} from './utils/validation.js';
 import {buildReport,buildCompletedReport} from './services/report.service.js';
 import {createReportWorkbook} from './services/report-export.service.js';
+import {recordHeartbeat,recordLoginPresence,recordAuthenticatedRequest,clearSession,liveEvaluatorSnapshot} from './services/presence.service.js';
 
 if(!process.env.MONGO_URI){console.error('\n[CONFIG ERROR] MONGO_URI is missing. Copy server/.env.example to server/.env, then enter your MongoDB Atlas URI. See server/START-HERE.md.\n');process.exit(1);}
 if(DEMO_MODE){console.error('\n[CONFIG ERROR] DEMO_MODE must be false for MongoDB-backed evaluations. Update server/.env.\n');process.exit(1);}
@@ -30,10 +31,14 @@ app.use(cors({
 
 app.use(helmet({contentSecurityPolicy:false}));
 app.use(express.json({limit:'32kb'}));
-app.use('/api',rateLimit({windowMs:60000,limit:120,standardHeaders:'draft-7',legacyHeaders:false}));
+// Multiple college evaluators can share one public/NAT IP. A 120/minute
+// all-API limit wrongly blocks their heartbeats and normal marks entry.
+// Keep a broad safety limit for ordinary traffic and a tighter login-only limit.
+app.use('/api',rateLimit({windowMs:60000,limit:1200,standardHeaders:'draft-7',legacyHeaders:false}));
+const loginLimiter=rateLimit({windowMs:60000,limit:120,standardHeaders:'draft-7',legacyHeaders:false});
 app.get('/api/auth/users',(_req,res)=>res.json({evaluators:approvedUsers('evaluator'),admins:approvedUsers('admin')}));
-app.post('/api/auth/login',async(req,res,next)=>{try{const username=String(req.body?.staffId||req.body?.username||'').trim();const password=String(req.body?.password||'');const session=await login(username,password);if(!session)return res.status(401).json({error:'Invalid approved account or password. Ask the LMS administrators to check account setup.'});res.set('Cache-Control','no-store');res.json(session);}catch(e){next(e);}});
-app.use('/api',async(req,res,next)=>{if(req.path==='/health')return next();const token=(req.get('authorization')||'').replace(/^Bearer\s+/i,'');const user=await authenticate(token);if(!user)return res.status(401).json({error:'Sign in to continue or session expired.'});(req as any).identity=user;next();});
+app.post('/api/auth/login',loginLimiter,async(req,res,next)=>{try{const username=String(req.body?.staffId||req.body?.username||'').trim();const password=String(req.body?.password||'');const session=await login(username,password);if(!session)return res.status(401).json({error:'Invalid approved account or password. Ask the LMS administrators to check account setup.'});if(session.role==='evaluator')await recordLoginPresence(session.staffId,session.token).catch(e=>console.warn('[PRESENCE] Login activity unavailable:',e instanceof Error?e.message:e));res.set('Cache-Control','no-store');res.json(session);}catch(e){next(e);}});
+app.use('/api',async(req,res,next)=>{try{if(req.path==='/health')return next();const token=(req.get('authorization')||'').replace(/^Bearer\s+/i,'');const user=await authenticate(token);if(!user)return res.status(401).json({error:'Sign in to continue or session expired.'});(req as any).identity=user;if(user.role==='evaluator'&&!req.path.startsWith('/activity/')){await recordAuthenticatedRequest(user.username,token,req.method,req.path).catch(e=>console.warn('[PRESENCE] Authenticated request activity unavailable:',e instanceof Error?e.message:e));}next();}catch(e){next(e);}});
 app.get('/api/auth/me',(req,res)=>{const user=(req as any).identity;res.set('Cache-Control','no-store');res.json({username:user.username,role:user.role,name:user.name,department:user.department});});
 const identity=(req:any)=>req.identity as {username:string,role:string,name:string,department?:string};
 const isAdmin=(req:any)=>identity(req)?.role==='admin';
@@ -42,6 +47,21 @@ const isEvaluator=(req:any)=>identity(req)?.role==='evaluator';
 const viewer=(_req:any,_res:any,next:any)=>next();
 const evaluator=(req:any,res:any,next:any)=>isEvaluator(req)?next():res.status(403).json({error:'Evaluator permission required.'});
 const administrator=(req:any,res:any,next:any)=>isAdmin(req)?next():res.status(403).json({error:'Administrator permission required.'});
+// Presence is deliberately opt-in by authenticated evaluator sessions only.
+// The token is hashed before storage; admin endpoints never expose a session identifier.
+app.post('/api/activity/heartbeat',evaluator,async(req,res,next)=>{try{
+  const token=(req.get('authorization')||'').replace(/^Bearer\s+/i,'');
+  const result=await recordHeartbeat(identity(req).username,token,req.body);
+  res.set('Cache-Control','no-store').json(result);
+}catch(e){next(e);}});
+app.post('/api/activity/logout',evaluator,async(req,res,next)=>{try{
+  const token=(req.get('authorization')||'').replace(/^Bearer\s+/i,'');
+  await clearSession(token);res.json({ok:true});
+}catch(e){next(e);}});
+app.get('/api/admin/live-evaluators',administrator,async(_req,res,next)=>{try{
+  res.set('Cache-Control','no-store').json(await liveEvaluatorSnapshot());
+}catch(e){next(e);}});
+
 app.get('/api/admin/accounts',administrator,async(_req,res,next)=>{try{res.json({users:await listManagedAccounts()});}catch(e){next(e)}});
 app.post('/api/admin/accounts/reset-password',administrator,async(req,res,next)=>{try{const id=String(req.body?.username||'').toUpperCase(),password=String(req.body?.password||'');if(password.length<8)return res.status(400).json({error:'Password must be at least 8 characters.'});const ok=await resetPasswordByAdmin(id,password);if(!ok)return res.status(404).json({error:'Evaluator account not found.'});res.json({ok:true});}catch(e){next(e)}});
 app.post('/api/auth/change-password',async(req,res,next)=>{try{const user=identity(req),oldPassword=String(req.body?.oldPassword||''),newPassword=String(req.body?.newPassword||'');const {AccountModel}=await import('./models/schemas/index.js');const acct=await AccountModel.findOne({username:user.username}).lean();if(!acct||!verifyPassword(oldPassword,acct.passwordSalt,acct.passwordHash))return res.status(403).json({error:'Current password is incorrect.'});await changePassword(user.username,newPassword);res.json({ok:true,signOut:true});}catch(e){next(e)}});
